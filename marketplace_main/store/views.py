@@ -1,20 +1,59 @@
-from django.shortcuts import render
-
-# Create your views here.
+from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth import login, authenticate, logout
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import get_object_or_404
+from django.core.paginator import Paginator
+from django.db.models import Q
 from django.http import HttpResponseForbidden
 from .forms import ProductForm
-from .models import Product
-from django.shortcuts import render, redirect
-from django.contrib.auth import login, authenticate, logout
+
 from .forms import RegisterForm
 from .models import Product
-
+from .models import Cart, CartItem, Category
 
 def home(request):
-    products = Product.objects.select_related('owner').prefetch_related('categories').all()
-    return render(request, 'store/home.html', {'products': products})
+
+    query = request.GET.get('q')
+    category_id = request.GET.get('category')
+
+    products = Product.objects.select_related(
+        'owner'
+    ).prefetch_related(
+        'categories'
+    ).all()
+
+    # =========================
+    # 🔎 Busqueda
+    # =========================
+    if query:
+        products = products.filter(
+            Q(name__icontains=query) |
+            Q(description__icontains=query)
+        )
+
+    # =========================
+    # 🏷️ Filtro categoria
+    # =========================
+    if category_id:
+        products = products.filter(
+            categories__id=category_id
+        )
+
+    # =========================
+    # 📄 Paginacion
+    # =========================
+    paginator = Paginator(products, 6)
+
+    page_number = request.GET.get('page')
+
+    page_obj = paginator.get_page(page_number)
+
+    categories = Category.objects.all()
+
+    return render(request, 'store/home.html', {
+        'page_obj': page_obj,
+        'categories': categories,
+        'products': products
+    })
 
 
 def register(request):
@@ -71,14 +110,15 @@ def product_create(request):
     if not request.user.is_seller:
         return HttpResponseForbidden("Solo vendedores")
 
-    form = ProductForm(request.POST or None)
+    # Importante: Añadimos request.FILES
+    form = ProductForm(request.POST or None, request.FILES or None)
 
     if form.is_valid():
         product = form.save(commit=False)
         product.owner = request.user
         product.save()
         form.save_m2m()
-
+        
         return redirect('dashboard')
 
     return render(request, 'store/product_form.html', {'form': form})
@@ -94,7 +134,8 @@ def product_update(request, pk):
     if product.owner != request.user:
         return HttpResponseForbidden("No puedes editar este producto")
 
-    form = ProductForm(request.POST or None, instance=product)
+    #form = ProductForm(request.POST or None, instance=product)
+    form = ProductForm(request.POST or None, request.FILES or None, instance=product)
 
     if form.is_valid():
         form.save()
@@ -119,7 +160,7 @@ def product_delete(request, pk):
 
     return render(request, 'store/product_confirm_delete.html', {'product': product})
 
-from .models import Cart, CartItem
+
 
 
 # =========================
@@ -127,9 +168,11 @@ from .models import Cart, CartItem
 # =========================
 @login_required
 def cart_detail(request):
-    cart = Cart.objects.get(user=request.user)
+    cart, created = Cart.objects.get_or_create(
+        user=request.user
+    )
 
-    return render(request, 'marketplace/cart_detail.html', {
+    return render(request, 'store/cart_detail.html', {
         'cart': cart
     })
 
@@ -139,7 +182,9 @@ def cart_detail(request):
 # =========================
 @login_required
 def add_to_cart(request, product_id):
-    cart = Cart.objects.get(user=request.user)
+    cart, created = Cart.objects.get_or_create(
+            user=request.user
+        )
 
     product = get_object_or_404(Product, id=product_id)
 
